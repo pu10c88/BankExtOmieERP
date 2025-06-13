@@ -1,165 +1,163 @@
-# Bank Statement Extractor
+# OmieERP Bank Statement BR
 
-A Python module for extracting transactions from bank statement PDF files and exporting them to CSV format.
+🇧🇷 **Extrator de Extratos Bancários com Integração Omie ERP**
 
-## Features
+Uma aplicação Python especializada para extrair transações de extratos bancários em PDF do Banco Inter e exportar diretamente para o sistema Omie ERP, além de outros formatos de relatórios.
 
-- **PDF Text Extraction**: Supports both `pdfplumber` and `PyPDF2` libraries for robust PDF text extraction
-- **Pattern Recognition**: Uses regular expressions to identify transaction patterns
-- **Transaction Classification**: Automatically classifies transactions as debit or credit
-- **CSV Export**: Exports all extracted transactions to a structured CSV file
-- **Batch Processing**: Processes multiple PDF files at once
-- **Summary Reports**: Provides detailed summaries of extracted data
-- **Flexible Configuration**: Customizable input/output folders and file naming
+## 🎯 **Principais Funcionalidades**
 
-## Installation
+### 🏦 **Extração de Dados Bancários**
+- **Suporte ao Banco Inter**: Extração otimizada para PDFs do Banco Inter
+- **Processamento em Lote**: Processa múltiplos arquivos PDF simultaneamente
+- **Reconhecimento Inteligente**: Identifica automaticamente padrões de transações
+- **Classificação Automática**: Separa débitos e créditos automaticamente
 
-1. **Clone or download the files** to your project directory
+### 🔗 **Integração Omie ERP**
+- **Formato Nativo Omie**: Exportação direta no formato CSV do Omie ERP
+- **Mapeamento de Campos**: Conversão automática para campos Omie:
+  - `cNomeFornecedor` → Nome do fornecedor (extraído da descrição)
+  - `nValorTitulo` → Valor da transação (apenas débitos)
+  - `cNumeroCartao` → Número do cartão (quando disponível)
+  - `cNumeroParcelas` → Informações de parcelamento
+  - `cObservacao` → "Fatura do Banco Inter" + detalhes de parcelas
+  - `dEmissao` → Data da compra (transação individual)
+  - `dVencimento` → Data de vencimento da fatura
+- **Detecção de Parcelas**: Identifica automaticamente informações de parcelamento
+- **Extração de Fornecedores**: Limpa e padroniza nomes de fornecedores
 
-2. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+### 📊 **Tipos de Relatórios**
+- **`standard`** - Relatório completo com todas as transações
+- **`omie`** - Formato específico para Omie ERP 
+- **`by-card`** - Agrupado por cartão de crédito
+- **`by-vendor`** - Agrupado por fornecedor/vendedor
+- **`by-month`** - Agrupado por mês
+- **`summary`** - Resumo executivo
 
-## Usage
+## 🚀 **Instalação**
 
-### Command Line Interface
+### 1. **Clone o repositório**
+```bash
+git clone https://github.com/pu10c88/BankExtOmieERP.git
+cd BankExtOmieERP
+```
 
-The simplest way to use the extractor is through the command line:
+### 2. **Instale as dependências**
+```bash
+pip install -r requirements.txt
+```
+
+### 3. **Estrutura de pastas**
+```
+BankExtOmieERP/
+├── 📁 InterStatements/     # Coloque seus PDFs do Banco Inter aqui
+├── 📁 output/              # Arquivos CSV gerados
+├── 🐍 BankOmieApp.py       # Aplicação principal
+└── 📄 requirements.txt     # Dependências
+```
+
+## 💻 **Como Usar**
+
+### **🎯 Integração Omie ERP (Recomendado)**
 
 ```bash
-# Basic usage (processes PDFs in 'InterStatements' folder)
-python BankOmieApp.py
+# Exportação direta para Omie ERP
+python3 BankOmieApp.py --report-type omie --invoice-date "31/12/2024"
 
-# Specify custom input and output folders
-python BankOmieApp.py --input /path/to/statements --output /path/to/output
+# Com nome de arquivo personalizado
+python3 BankOmieApp.py --report-type omie --invoice-date "31/12/2024" --filename "fatura_dezembro.csv"
 
-# Custom output filename
-python BankOmieApp.py --filename my_transactions.csv
-
-# Verbose logging
-python BankOmieApp.py --verbose
+# Modo interativo (pergunta a data da fatura)
+python3 BankOmieApp.py --report-type omie
 ```
 
-### Python API
-
-You can also use the extractor programmatically:
-
-```python
-from BankOmieApp import BankStatementExtractor
-
-# Create extractor instance
-extractor = BankStatementExtractor(
-    statement_folder="InterStatements",
-    output_folder="output"
-)
-
-# Process all PDFs and extract transactions
-transactions = extractor.process_all_files()
-
-# Export to CSV
-csv_file = extractor.export_to_csv("transactions.csv")
-
-# Get summary
-summary = extractor.get_summary()
-print(f"Extracted {summary['total_transactions']} transactions")
-```
-
-### Example Usage
-
-Run the example script to see the extractor in action:
+### **📊 Outros Tipos de Relatório**
 
 ```bash
-python example_usage.py
+# Relatório por cartão
+python3 BankOmieApp.py --report-type by-card
+
+# Relatório por fornecedor
+python3 BankOmieApp.py --report-type by-vendor
+
+# Relatório por mês
+python3 BankOmieApp.py --report-type by-month
+
+# Resumo executivo
+python3 BankOmieApp.py --report-type summary
+
+# Relatório padrão (todas as transações)
+python3 BankOmieApp.py --report-type standard
 ```
 
-## File Structure
+### **⚙️ Opções Avançadas**
 
-```
-your_project/
-├── BankOmieApp.py                 # Main extractor module
-├── example_usage.py               # Example usage script
-├── requirements.txt               # Dependencies
-├── README.md                      # This file
-├── InterStatements/               # Input folder for PDF statements
-│   └── MERAKI_FATURA_05.25.pdf   # Your bank statement PDFs
-└── output/                        # Output folder (created automatically)
-    └── bank_transactions_*.csv    # Generated CSV files
-```
+```bash
+# Ver todas as opções
+python3 BankOmieApp.py --help
 
-## Output Format
+# Modo verboso (mais detalhes)
+python3 BankOmieApp.py --report-type omie --invoice-date "31/12/2024" --verbose
 
-The extracted transactions are saved in CSV format with the following columns:
+# Pasta de entrada personalizada
+python3 BankOmieApp.py --input "MinhasPastas/Extratos" --report-type omie --invoice-date "31/12/2024"
 
-| Column | Description |
-|--------|-------------|
-| `date` | Transaction date |
-| `description` | Transaction description/memo |
-| `amount` | Transaction amount (positive number) |
-| `transaction_type` | Either 'debit' or 'credit' |
-| `balance` | Account balance (if available) |
-| `reference` | Source file reference |
-| `category` | Transaction category (if available) |
-
-## Supported PDF Formats
-
-The extractor works with various bank statement formats and uses pattern matching to identify:
-
-- **Date formats**: MM/DD/YYYY, DD/MM/YYYY, YYYY-MM-DD, MM/DD
-- **Amount formats**: 123.45, 123,45, (123.45), -123.45
-- **Transaction types**: Automatic detection based on amount signs and keywords
-
-## Customization
-
-### Adding New Transaction Patterns
-
-You can extend the extractor to support additional bank formats by modifying the `transaction_patterns` list in the `BankStatementExtractor` class:
-
-```python
-self.transaction_patterns = [
-    r'(\d{2}[/-]\d{2}[/-]\d{4})\s+(.+?)\s+([-+]?\d+[.,]\d{2})',
-    # Add your custom patterns here
-    r'your_custom_pattern_here',
-]
+# Pasta de saída personalizada
+python3 BankOmieApp.py --output "Relatorios" --report-type omie --invoice-date "31/12/2024"
 ```
 
-### Adding Transaction Type Keywords
+## 📋 **Formato CSV Omie ERP**
 
-Customize transaction type detection by modifying the keyword lists:
+O arquivo CSV gerado para o Omie ERP contém as seguintes colunas:
 
-```python
-self.debit_keywords = ['DEBIT', 'WITHDRAWAL', 'PAYMENT', 'YOUR_BANK_DEBIT_TERM']
-self.credit_keywords = ['CREDIT', 'DEPOSIT', 'TRANSFER IN', 'YOUR_BANK_CREDIT_TERM']
+| Campo | Descrição | Exemplo |
+|-------|-----------|---------|
+| `cNomeFornecedor` | Nome do fornecedor | "MERCADOLIVRE" |
+| `nValorTitulo` | Valor da transação | "150.00" |
+| `cNumeroCartao` | Número do cartão | "1234" |
+| `cNumeroParcelas` | Info de parcelas | "4/10" |
+| `cObservacao` | Observações | "Fatura do Banco Inter - Parcela 4/10" |
+| `dEmissao` | Data da compra | "15/12/2024" |
+| `dVencimento` | Data de vencimento | "31/12/2024" |
+
+## 🔧 **Dependências**
+
+- **Python 3.7+**
+- **pdfplumber** - Extração de texto de PDFs
+- **PyPDF2** - Processamento alternativo de PDFs
+- **pandas** - Manipulação de dados
+- **re** - Expressões regulares (built-in)
+
+## 📁 **Estrutura do Projeto**
+
+```
+BankExtOmieERP/
+├── BankOmieApp.py              # 🎯 Aplicação principal
+├── example_omie_usage.py       # 📖 Exemplo de uso Omie
+├── example_usage.py            # 📖 Exemplo básico
+├── generate_card_reports.py    # 📊 Relatórios por cartão
+├── requirements.txt            # 📦 Dependências
+├── README.md                   # 📚 Documentação
+├── .gitignore                  # 🔒 Arquivos ignorados
+├── InterStatements/            # 📁 PDFs do banco (não versionado)
+└── output/                     # 📁 CSVs gerados (não versionado)
 ```
 
-## Troubleshooting
+## 🔒 **Segurança e Privacidade**
 
-### No transactions extracted
-1. Ensure PDF files are in the correct folder (`InterStatements` by default)
-2. Check that PDFs contain machine-readable text (not scanned images)
-3. Verify the transaction patterns match your bank's statement format
-4. Run with `--verbose` flag to see detailed processing logs
+- ✅ **PDFs não versionados**: Pasta `InterStatements/` excluída do Git
+- ✅ **CSVs não versionados**: Pasta `output/` excluída do Git
+- ✅ **Dados locais**: Todos os dados permanecem no seu computador
+- ✅ **Sem conexão externa**: Processamento 100% offline
 
-### Installation issues
-1. Make sure you have Python 3.7+ installed
-2. Install dependencies: `pip install -r requirements.txt`
-3. If PDF libraries fail to install, try: `pip install --upgrade pip setuptools wheel`
+## 🤝 **Contribuição**
 
-### Custom bank formats
-1. Examine your PDF's text structure by extracting text manually
-2. Create custom regex patterns to match your bank's format
-3. Test patterns with a small sample before processing all files
+Este é um projeto privado. Para sugestões ou melhorias, entre em contato diretamente.
 
-## Dependencies
+## 📄 **Licença**
 
-- **pdfplumber**: For advanced PDF text extraction
-- **PyPDF2**: Fallback PDF text extraction
-- **pandas**: Data manipulation (optional, for advanced features)
+Projeto privado - Todos os direitos reservados.
 
-## Contributing
+---
 
-Feel free to extend this extractor for additional bank formats or features. The modular design makes it easy to add support for new statement formats.
-
-## License
-
-This project is open source. Feel free to modify and distribute as needed. 
+**🇧🇷 Desenvolvido no Brasil para o mercado brasileiro**  
+**🏦 Especializado em Banco Inter + Omie ERP** 
