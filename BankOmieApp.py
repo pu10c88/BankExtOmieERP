@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Bank Statement Extractor
-A module to parse bank statements from PDF files and extract transactions to CSV format.
+A modular tool to parse bank statements from PDF files and extract transactions to CSV format.
+Supports Inter and Itaú bank statements.
 """
 
 import os
@@ -9,10 +10,11 @@ import re
 import csv
 import logging
 from datetime import datetime
-from typing import List, Dict, Optional, Tuple
-from dataclasses import dataclass, asdict
+from typing import List, Dict, Optional
+from dataclasses import asdict
 import argparse
 
+# Import PDF libraries
 try:
     import pdfplumber
 except ImportError:
@@ -23,33 +25,29 @@ try:
 except ImportError:
     PyPDF2 = None
 
+# Import our specialized extractors
+from inter_extractor import InterExtractor, Transaction
+from itau_extractor import ItauExtractor
 
-@dataclass
-class Transaction:
-    """Data class to represent a bank transaction."""
-    date: str
-    description: str
-    amount: float
-    transaction_type: str  # 'debit' or 'credit'
-    card_number: Optional[str] = None
-    balance: Optional[float] = None
-    reference: Optional[str] = None
-    category: Optional[str] = None
+
+# Transaction class imported from extractors
 
 
 class BankStatementExtractor:
     """Main class for extracting transactions from bank statements."""
     
-    def __init__(self, statement_folder: str = "InterStatements", output_folder: str = "output"):
+    def __init__(self, statement_folder: str = "InterStatements", output_folder: str = "output", bank_type: str = "inter"):
         """
         Initialize the extractor.
         
         Args:
             statement_folder: Folder containing bank statement PDFs
             output_folder: Folder to save CSV output files
+            bank_type: Type of bank statements ("inter" or "itau")
         """
         self.statement_folder = statement_folder
         self.output_folder = output_folder
+        self.bank_type = bank_type.lower()
         self.transactions: List[Transaction] = []
         
         # Set up logging
@@ -59,20 +57,15 @@ class BankStatementExtractor:
         # Create output folder if it doesn't exist
         os.makedirs(output_folder, exist_ok=True)
         
-        # Brazilian Inter bank statement table format patterns
-        self.transaction_patterns = [
-            # Main pattern: "DD de MMM. YYYY DESCRIPTION - R$ AMOUNT" or "DD de MMM. YYYY DESCRIPTION - + R$ AMOUNT"
-            r'(\d{2}\s+de\s+\w+\.?\s+\d{4})\s+(.+?)\s+-\s+(?:\+\s+)?R\$\s+([\d.,]+)',
-            # Pattern for lines with just the amount at the end: "DD de MMM. YYYY DESCRIPTION R$ AMOUNT"
-            r'(\d{2}\s+de\s+\w+\.?\s+\d{4})\s+(.+?)\s+(?:\+\s+)?R\$\s+([\d.,]+)',
-            # Backup patterns for other formats
-            r'(\d{2}[/-]\d{2}[/-]\d{4})\s+(.+?)\s+([-+]?\d+[.,]\d{2})',
-            r'(\d{4}-\d{2}-\d{2})\s+(.+?)\s+([-+]?\d+[.,]\d{2})',
-        ]
+        # Initialize the appropriate extractor
+        if self.bank_type == "inter":
+            self.extractor = InterExtractor()
+        elif self.bank_type == "itau":
+            self.extractor = ItauExtractor()
+        else:
+            raise ValueError(f"Unsupported bank type: {bank_type}. Supported types: 'inter', 'itau'")
         
-        # Patterns to identify transaction types
-        self.debit_keywords = ['DEBIT', 'WITHDRAWAL', 'TRANSFER OUT', 'FEE', 'CHARGE', 'MULTA', 'ENCARGOS', 'JUROS', 'IOF', 'TRANSFERENCIA']
-        self.credit_keywords = ['CREDIT', 'DEPOSIT', 'TRANSFER IN', 'REFUND', 'INTEREST', 'PAGAMENTO', 'DEB AUT']
+        self.logger.info(f"Initialized {bank_type.upper()} bank statement extractor")
     
     def extract_text_from_pdf(self, pdf_path: str) -> str:
         """
@@ -116,211 +109,7 @@ class BankStatementExtractor:
             
         return text
     
-    def parse_amount(self, amount_str: str) -> Tuple[float, str]:
-        """
-        Parse amount string and determine transaction type.
-        
-        Args:
-            amount_str: String representation of amount
-            
-        Returns:
-            Tuple of (amount as float, transaction_type)
-        """
-        original_amount = amount_str.strip()
-        
-        # Check for negative sign or parentheses (indicating debit)
-        is_debit = False
-        if original_amount.startswith('-') or (original_amount.startswith('(') and original_amount.endswith(')')):
-            is_debit = True
-            amount_str = amount_str.replace('-', '').replace('(', '').replace(')', '').strip()
-        
-        # Handle Brazilian currency format (thousands separator)
-        # Example: "1.234,56" should become "1234.56"
-        if ',' in amount_str and '.' in amount_str:
-            # Format like "1.234,56" - dot is thousands separator, comma is decimal
-            amount_str = amount_str.replace('.', '').replace(',', '.')
-        elif ',' in amount_str and '.' not in amount_str:
-            # Format like "1234,56" - comma is decimal separator
-            amount_str = amount_str.replace(',', '.')
-        # If only dots, assume it's already in the correct format
-        
-        try:
-            amount = float(amount_str)
-            transaction_type = 'debit' if is_debit else 'credit'
-            return amount, transaction_type
-        except ValueError:
-            self.logger.warning(f"Could not parse amount: {original_amount} -> {amount_str}")
-            return 0.0, 'unknown'
-    
-    def parse_brazilian_date(self, date_str: str) -> str:
-        """
-        Parse Brazilian date format to a standard format.
-        
-        Args:
-            date_str: Date string in Brazilian format (e.g., "03 de out. 2024")
-            
-        Returns:
-            Standardized date string
-        """
-        # Mapping of Portuguese month abbreviations to numbers
-        months = {
-            'jan': '01', 'fev': '02', 'mar': '03', 'abr': '04',
-            'mai': '05', 'jun': '06', 'jul': '07', 'ago': '08',
-            'set': '09', 'out': '10', 'nov': '11', 'dez': '12'
-        }
-        
-        try:
-            # Handle format like "03 de out. 2024"
-            parts = date_str.lower().split()
-            if len(parts) >= 3 and 'de' in parts:
-                day = parts[0].zfill(2)
-                month_abbr = parts[2].replace('.', '')
-                year = parts[3] if len(parts) > 3 else '2024'
-                
-                if month_abbr in months:
-                    month = months[month_abbr]
-                    return f"{day}/{month}/{year}"
-        except Exception as e:
-            self.logger.debug(f"Error parsing Brazilian date '{date_str}': {e}")
-        
-        # If parsing fails, return original
-        return date_str
 
-    def determine_transaction_type(self, description: str, amount: float, transaction_type: str) -> str:
-        """
-        Determine transaction type based on description and amount.
-        
-        Args:
-            description: Transaction description
-            amount: Transaction amount
-            transaction_type: Initial transaction type
-            
-        Returns:
-            Refined transaction type
-        """
-        description_upper = description.upper()
-        
-        # Check for explicit keywords
-        for keyword in self.debit_keywords:
-            if keyword in description_upper:
-                return 'debit'
-        
-        for keyword in self.credit_keywords:
-            if keyword in description_upper:
-                return 'credit'
-        
-        # If no keywords found, use the original determination
-        return transaction_type
-    
-    def extract_transactions_from_text(self, text: str, filename: str) -> List[Transaction]:
-        """
-        Extract transactions from extracted text using pattern matching.
-        
-        Args:
-            text: Extracted text from PDF
-            filename: Name of the source file
-            
-        Returns:
-            List of Transaction objects
-        """
-        transactions = []
-        lines = text.split('\n')
-        processed_lines = set()  # To avoid duplicate processing
-        current_card = None  # Track current card being processed
-        
-        for line_num, line in enumerate(lines):
-            line = line.strip()
-            if not line or line in processed_lines:
-                continue
-            
-            # Check if this line defines a new card section
-            card_match = re.search(r'CARTÃO\s+(\d{4}\*{4}\d{4})', line)
-            if card_match:
-                current_card = card_match.group(1)
-                self.logger.debug(f"Found card section: {current_card}")
-                continue
-            
-            # Skip header lines and summary lines
-            if any(skip_word in line.upper() for skip_word in ['DATA', 'VALOR', 'BENEFICIÁRIO', 'MOVIMENTAÇÃO', 'RESUMO', 'LIMITE', 'FATURA', 'TOTAL CARTÃO']):
-                continue
-            
-            # Skip lines that are just currency symbols or very short
-            if len(line) < 10 or line == 'R$':
-                continue
-            
-            found_match = False
-            
-            # Try each pattern
-            for pattern in self.transaction_patterns:
-                matches = re.findall(pattern, line)
-                if matches:
-                    for match in matches:
-                        try:
-                            date_str, description, amount_str = match
-                            
-                            # Skip if description is just currency symbol or too short
-                            if description.strip() in ['R$', ''] or len(description.strip()) < 3:
-                                continue
-                            
-                            # Parse amount and determine type
-                            amount, initial_transaction_type = self.parse_amount(amount_str)
-                            
-                            # Skip zero or invalid amounts
-                            if amount <= 0:
-                                continue
-                            
-                            # Parse and standardize date
-                            parsed_date = self.parse_brazilian_date(date_str)
-                            
-                            # Clean up description
-                            description = ' '.join(description.split())
-                            
-                            # Determine transaction type based on context
-                            # In a credit card statement, expenses are debits and payments are credits
-                            transaction_type = 'debit'  # Default for expenses
-                            
-                            # Check if line contains a + sign (indicating payment/credit)
-                            if '+ R$' in line or '+R$' in line:
-                                transaction_type = 'credit'
-                            # Check if it's a payment/credit based on keywords
-                            elif any(keyword in description.upper() for keyword in self.credit_keywords):
-                                transaction_type = 'credit'
-                            
-                            # Create transaction
-                            transaction = Transaction(
-                                date=parsed_date,
-                                description=description,
-                                amount=amount,
-                                transaction_type=transaction_type,
-                                card_number=current_card,
-                                reference=f"{filename}:line{line_num+1}"
-                            )
-                            
-                            transactions.append(transaction)
-                            found_match = True
-                            break  # Stop trying other patterns once we find a match
-                            
-                        except (ValueError, IndexError) as e:
-                            self.logger.debug(f"Error parsing line '{line}': {e}")
-                            continue
-                
-                if found_match:
-                    break  # Stop trying other patterns
-            
-            if found_match:
-                processed_lines.add(line)
-        
-        # Remove duplicates based on date, description, amount, and card
-        unique_transactions = []
-        seen = set()
-        
-        for transaction in transactions:
-            key = (transaction.date, transaction.description, transaction.amount, transaction.transaction_type, transaction.card_number)
-            if key not in seen:
-                seen.add(key)
-                unique_transactions.append(transaction)
-        
-        return unique_transactions
     
     def process_single_file(self, file_path: str) -> List[Transaction]:
         """
@@ -330,21 +119,22 @@ class BankStatementExtractor:
             file_path: Path to the PDF file
             
         Returns:
-            List of extracted transactions
+            List of transactions extracted from the file
         """
         self.logger.info(f"Processing file: {file_path}")
         
         # Extract text from PDF
         text = self.extract_text_from_pdf(file_path)
-        if not text:
-            self.logger.error(f"Could not extract text from {file_path}")
+        
+        if not text.strip():
+            self.logger.warning(f"No text extracted from {file_path}")
             return []
         
-        # Extract transactions from text
+        # Use the appropriate extractor
         filename = os.path.basename(file_path)
-        transactions = self.extract_transactions_from_text(text, filename)
+        transactions = self.extractor.extract_transactions_from_text(text, filename)
         
-        self.logger.info(f"Extracted {len(transactions)} transactions from {filename}")
+        self.logger.info(f"Extracted {len(transactions)} transactions from {file_path}")
         return transactions
     
     def process_all_files(self) -> List[Transaction]:
@@ -352,31 +142,29 @@ class BankStatementExtractor:
         Process all PDF files in the statement folder.
         
         Returns:
-            List of all extracted transactions
+            List of all transactions extracted from all files
         """
-        all_transactions = []
+        self.transactions = []
         
         if not os.path.exists(self.statement_folder):
-            self.logger.error(f"Statement folder '{self.statement_folder}' does not exist")
-            return all_transactions
+            self.logger.error(f"Statement folder not found: {self.statement_folder}")
+            return []
         
-        # Find all PDF files
         pdf_files = [f for f in os.listdir(self.statement_folder) if f.lower().endswith('.pdf')]
         
         if not pdf_files:
-            self.logger.warning(f"No PDF files found in '{self.statement_folder}'")
-            return all_transactions
+            self.logger.warning(f"No PDF files found in {self.statement_folder}")
+            return []
         
         self.logger.info(f"Found {len(pdf_files)} PDF files to process")
         
-        # Process each file
         for pdf_file in pdf_files:
             file_path = os.path.join(self.statement_folder, pdf_file)
-            transactions = self.process_single_file(file_path)
-            all_transactions.extend(transactions)
+            file_transactions = self.process_single_file(file_path)
+            self.transactions.extend(file_transactions)
         
-        self.transactions = all_transactions
-        return all_transactions
+        self.logger.info(f"Total transactions extracted: {len(self.transactions)}")
+        return self.transactions
     
     def export_to_csv(self, filename: str = None) -> str:
         """
@@ -883,8 +671,8 @@ class BankStatementExtractor:
 def main():
     """Main function to run the bank statement extractor."""
     parser = argparse.ArgumentParser(description='Extract transactions from bank statement PDFs')
-    parser.add_argument('--input', '-i', default='InterStatements', 
-                       help='Input folder containing PDF statements (default: InterStatements)')
+    parser.add_argument('--input', '-i', 
+                       help='Input folder containing PDF statements')
     parser.add_argument('--output', '-o', default='output', 
                        help='Output folder for CSV files (default: output)')
     parser.add_argument('--filename', '-f', 
@@ -899,13 +687,34 @@ def main():
                        choices=['standard', 'omie', 'by-card', 'by-vendor', 'by-month', 'summary'],
                        help='Type of CSV report to generate')
     
+    # Bank type selection (mutually exclusive)
+    bank_group = parser.add_mutually_exclusive_group(required=True)
+    bank_group.add_argument('--inter', action='store_true',
+                           help='Process Inter bank statements')
+    bank_group.add_argument('--itau', action='store_true',
+                           help='Process Itaú credit card statements')
+    
     args = parser.parse_args()
     
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
+    # Determine bank type and default input folder
+    if args.inter:
+        bank_type = "inter"
+        default_input = "InterStatements"
+    elif args.itau:
+        bank_type = "itau"
+        default_input = "ItauStataments"
+    else:
+        # This shouldn't happen due to mutually_exclusive_group(required=True)
+        parser.error("Must specify either --inter or --itau")
+    
+    # Use provided input folder or default
+    input_folder = args.input if args.input else default_input
+    
     # Create extractor instance
-    extractor = BankStatementExtractor(args.input, args.output)
+    extractor = BankStatementExtractor(input_folder, args.output, bank_type)
     
     # Process all files
     transactions = extractor.process_all_files()

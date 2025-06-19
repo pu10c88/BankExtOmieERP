@@ -130,10 +130,12 @@ dmypy.json
 
 # BankOmieApp specific
 # Output CSV files (podem conter dados sensíveis)
-output/*.csv
+output/
 
-# PDF statements (dados sensíveis) - pasta inteira excluída
+# PDF statements (dados sensíveis) - pastas inteiras excluídas
 InterStatements/
+ItauStataments/
+PastaDiferente/
 
 # Mac system files
 .DS_Store
