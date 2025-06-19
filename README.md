@@ -4,6 +4,25 @@
 
 Uma aplicação Python modular especializada para extrair transações de extratos bancários em PDF do **Banco Inter** e **cartões de crédito Itaú**, com integração ao sistema Omie ERP e múltiplos formatos de relatórios.
 
+---
+
+## ⚠️ **PROJETO PRIVADO**
+
+**🔒 Propriedade Intelectual:**  
+Este projeto é de **propriedade exclusiva** e **autoria de Paulo Loureiro**.
+
+**📝 Licença:**  
+- ❌ **Uso comercial proibido** sem autorização expressa
+- ❌ **Redistribuição proibida** sem permissão do autor
+- ❌ **Modificação e derivação proibida** para uso comercial
+- ✅ **Uso pessoal** permitido apenas para o autor
+
+**📧 Contato do Autor:**  
+**Paulo Loureiro** - Desenvolvedor e Proprietário  
+*Para licenciamento comercial ou dúvidas sobre uso, entre em contato.*
+
+---
+
 ## 🎯 **Principais Funcionalidades**
 
 ### 🏦 **Suporte Multi-Bancos**
@@ -280,9 +299,15 @@ Para adicionar suporte a um novo banco:
 
 ## 📄 **Licença**
 
-Projeto privado - Todos os direitos reservados.
+**© 2025 Paulo Loureiro - Todos os direitos reservados**
+
+🔒 **Projeto Privado** - Propriedade exclusiva do autor  
+❌ **Uso comercial proibido** sem autorização expressa  
+❌ **Redistribuição proibida** sem permissão prévia  
+✅ **Uso pessoal** limitado ao proprietário
 
 ---
 
 **🇧🇷 Desenvolvido no Brasil para o mercado brasileiro**  
+**👨‍💻 Autor: Paulo Loureiro**  
 **🏦 Suporte: Banco Inter + Itaú + Arquitetura para Novos Bancos** 

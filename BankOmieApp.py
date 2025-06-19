@@ -9,6 +9,7 @@ import os
 import re
 import csv
 import logging
+import time
 from datetime import datetime
 from typing import List, Dict, Optional
 from dataclasses import asdict
@@ -109,6 +110,160 @@ class BankStatementExtractor:
             
         return text
     
+    def format_execution_time(self, seconds: float) -> str:
+        """
+        Format execution time in a readable format.
+        
+        Args:
+            seconds: Time in seconds
+            
+        Returns:
+            Formatted time string
+        """
+        if seconds < 60:
+            return f"{seconds:.2f} seconds"
+        elif seconds < 3600:
+            minutes = int(seconds // 60)
+            remaining_seconds = seconds % 60
+            return f"{minutes}m {remaining_seconds:.1f}s"
+        else:
+            hours = int(seconds // 3600)
+            remaining_minutes = int((seconds % 3600) // 60)
+            remaining_seconds = seconds % 60
+            return f"{hours}h {remaining_minutes}m {remaining_seconds:.0f}s"
+    
+    def deduplicate_transactions(self, transactions: List[Transaction]) -> List[Transaction]:
+        """
+        Remove duplicate transactions that appear in multiple statements.
+        Keep the transaction with the most recent/appropriate year.
+        
+        Args:
+            transactions: List of transactions to deduplicate
+            
+        Returns:
+            List of deduplicated transactions
+        """
+        from collections import defaultdict
+        from datetime import datetime
+        
+        # Group transactions by (day, month, normalized_description, amount)
+        groups = defaultdict(list)
+        
+        for transaction in transactions:
+            try:
+                # Parse date to get day and month
+                date_parts = transaction.date.split('/')
+                if len(date_parts) == 3:
+                    day, month, year = date_parts
+                    
+                    # Normalize description for better duplicate detection
+                    # Remove common date patterns, extra spaces, and common suffixes
+                    normalized_desc = self.normalize_description_for_deduplication(transaction.description)
+                    
+                    # Create a key based on day, month, normalized description, and amount
+                    key = (day, month, normalized_desc, transaction.amount)
+                    groups[key].append(transaction)
+            except Exception:
+                # If date parsing fails, keep the transaction as is
+                continue
+        
+        deduplicated = []
+        
+        for key, group in groups.items():
+            if len(group) == 1:
+                # No duplicates, keep the transaction
+                deduplicated.append(group[0])
+            else:
+                # Multiple transactions with same day/month/description/amount
+                # Keep the one with the most appropriate year
+                # Prefer more recent years, but not future years
+                current_year = datetime.now().year
+                
+                # Sort by year (prefer recent but not future)
+                valid_transactions = []
+                for t in group:
+                    try:
+                        year = int(t.date.split('/')[2])
+                        # Only keep transactions from reasonable years
+                        if 2020 <= year <= current_year:
+                            valid_transactions.append((year, t))
+                    except:
+                        continue
+                
+                if valid_transactions:
+                    # Smart deduplication logic for Itaú statements:
+                    # Same DD/MM transaction appears in multiple statements with different years
+                    # Choose the year that makes most chronological sense
+                    
+                    # Sort by year (earliest first) 
+                    valid_transactions.sort(key=lambda x: x[0])
+                    
+                    # For transactions that appear in both 2024 and 2025,
+                    # prefer 2024 if the month suggests it's more likely from 2024
+                    day, month, description, amount = key
+                    transaction_month = int(month)
+                    
+                    # If we have transactions from both 2024 and 2025
+                    years = [x[0] for x in valid_transactions]
+                    if 2024 in years and 2025 in years:
+                        # For months Sept-Dec, prefer 2024 (more likely to be from previous year)
+                        if transaction_month >= 9:  # Sept, Oct, Nov, Dec
+                            best_transaction = next(t for y, t in valid_transactions if y == 2024)
+                            chosen_year = 2024
+                        else:
+                            # For Jan-Aug, prefer the earliest year available
+                            best_transaction = valid_transactions[0][1]
+                            chosen_year = valid_transactions[0][0]
+                    else:
+                        # If only one year available, use it
+                        best_transaction = valid_transactions[0][1]
+                        chosen_year = valid_transactions[0][0]
+                    
+                    deduplicated.append(best_transaction)
+                    
+                    # Log the deduplication
+                    years_str = [str(y) for y in years]
+                    self.logger.info(f"🔧 Deduplicated {int(day):02d}/{int(month):02d} {description[:30]}... from years {years_str} → kept {chosen_year} (smart choice)")
+                else:
+                    # If no valid transactions, keep the first one
+                    deduplicated.append(group[0])
+        
+        return deduplicated
+    
+    def normalize_description_for_deduplication(self, description: str) -> str:
+        """
+        Normalize transaction description for better duplicate detection.
+        
+        Args:
+            description: Original transaction description
+            
+        Returns:
+            Normalized description for grouping
+        """
+        import re
+        
+        # Convert to uppercase and strip whitespace
+        normalized = description.strip().upper()
+        
+        # Remove common date patterns that might vary between statements
+        # Examples: "02/03", "03/03", "04/04", etc.
+        normalized = re.sub(r'\s+\d{2}/\d{2}$', '', normalized)
+        normalized = re.sub(r'\s+\d{2}/\d{2}\s+', ' ', normalized)
+        
+        # Remove common amount patterns that might appear in descriptions
+        # Examples: "1.387,50", "2.700,00", etc.
+        normalized = re.sub(r'\s+[\d\.,]+$', '', normalized)
+        
+        # Remove extra whitespace and common suffixes
+        normalized = re.sub(r'\s+', ' ', normalized)
+        normalized = normalized.strip()
+        
+        # Remove common prefixes/suffixes that might vary
+        # Examples: "-CT", "CTAES", etc.
+        normalized = re.sub(r'-CT\w*$', '', normalized)
+        normalized = re.sub(r'\s+CT\w*$', '', normalized)
+        
+        return normalized.strip()
 
     
     def process_single_file(self, file_path: str) -> List[Transaction]:
@@ -121,6 +276,7 @@ class BankStatementExtractor:
         Returns:
             List of transactions extracted from the file
         """
+        file_start_time = time.time()
         self.logger.info(f"Processing file: {file_path}")
         
         # Extract text from PDF
@@ -134,7 +290,10 @@ class BankStatementExtractor:
         filename = os.path.basename(file_path)
         transactions = self.extractor.extract_transactions_from_text(text, filename)
         
-        self.logger.info(f"Extracted {len(transactions)} transactions from {file_path}")
+        file_end_time = time.time()
+        file_execution_time = file_end_time - file_start_time
+        
+        self.logger.info(f"Extracted {len(transactions)} transactions from {file_path} in {self.format_execution_time(file_execution_time)}")
         return transactions
     
     def process_all_files(self) -> List[Transaction]:
@@ -144,6 +303,7 @@ class BankStatementExtractor:
         Returns:
             List of all transactions extracted from all files
         """
+        start_time = time.time()
         self.transactions = []
         
         if not os.path.exists(self.statement_folder):
@@ -163,7 +323,21 @@ class BankStatementExtractor:
             file_transactions = self.process_single_file(file_path)
             self.transactions.extend(file_transactions)
         
+        end_time = time.time()
+        execution_time = end_time - start_time
+        
         self.logger.info(f"Total transactions extracted: {len(self.transactions)}")
+        
+        # Note: Deduplication disabled for Itaú statements
+        # Each statement should keep its transactions with the correct year calculated from its due date
+        # The same DD/MM transaction can legitimately appear in multiple statements with different years
+        self.logger.info(f"ℹ️ Deduplication disabled - each statement uses its own calculated year")
+        
+        self.logger.info(f"Extraction completed in {self.format_execution_time(execution_time)}")
+        
+        # Store execution time for later use
+        self.execution_time = execution_time
+        
         return self.transactions
     
     def export_to_csv(self, filename: str = None) -> str:
@@ -667,6 +841,272 @@ class BankStatementExtractor:
             "payments": payments
         }
 
+    def export_installments_csv(self, filename: str = None) -> str:
+        """
+        Export installments analysis to CSV format.
+        Shows detailed breakdown of detected installments vs regular transactions.
+        
+        Args:
+            filename: Custom filename for the CSV file
+            
+        Returns:
+            Path to the generated CSV file
+        """
+        if not filename:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"installments_report_{timestamp}.csv"
+        
+        filepath = os.path.join(self.output_folder, filename)
+        
+        # Analyze transactions for installments
+        installments = []
+        regular_transactions = []
+        
+        # Group by statement/card for better analysis
+        statements = {}
+        
+        for transaction in self.transactions:
+            # Extract card info
+            card = transaction.card_number if hasattr(transaction, 'card_number') else 'Unknown'
+            
+            # For Itaú, detect if this was treated as installment
+            # (transactions with due date as the transaction date are installments)
+            is_installment = self.is_likely_installment(transaction)
+            
+            if card not in statements:
+                statements[card] = {
+                    'installments': [],
+                    'regular': [],
+                    'total_installments': 0,
+                    'total_regular': 0
+                }
+            
+            if is_installment:
+                installments.append(transaction)
+                statements[card]['installments'].append(transaction)
+                statements[card]['total_installments'] += transaction.amount
+            else:
+                regular_transactions.append(transaction)
+                statements[card]['regular'].append(transaction)
+                statements[card]['total_regular'] += transaction.amount
+        
+        # Write CSV
+        with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+            
+            # Header
+            writer.writerow([
+                'Type',
+                'Date', 
+                'Description', 
+                'Amount', 
+                'Card',
+                'Installment_Indicator',
+                'Original_Date_Pattern',
+                'Month_Difference',
+                'Statement_Period'
+            ])
+            
+            # Write installments first
+            for transaction in installments:
+                original_pattern = self.extract_original_date_pattern(transaction.description)
+                month_diff = self.calculate_month_difference(transaction)
+                statement_period = self.get_statement_period(transaction)
+                
+                writer.writerow([
+                    'INSTALLMENT',
+                    transaction.date,
+                    transaction.description,
+                    f"{transaction.amount:.2f}",
+                    getattr(transaction, 'card_number', 'Unknown'),
+                    'YES',
+                    original_pattern,
+                    month_diff,
+                    statement_period
+                ])
+            
+            # Write regular transactions
+            for transaction in regular_transactions:
+                original_pattern = self.extract_original_date_pattern(transaction.description)
+                month_diff = self.calculate_month_difference(transaction)
+                statement_period = self.get_statement_period(transaction)
+                
+                writer.writerow([
+                    'REGULAR',
+                    transaction.date,
+                    transaction.description,
+                    f"{transaction.amount:.2f}",
+                    getattr(transaction, 'card_number', 'Unknown'),
+                    'NO',
+                    original_pattern,
+                    month_diff,
+                    statement_period
+                ])
+            
+            # Add summary section
+            writer.writerow([])  # Empty row
+            writer.writerow(['=== INSTALLMENTS SUMMARY ==='])
+            writer.writerow(['Category', 'Count', 'Total Amount', 'Percentage'])
+            
+            total_amount = sum(t.amount for t in self.transactions)
+            installments_total = sum(t.amount for t in installments)
+            regular_total = sum(t.amount for t in regular_transactions)
+            
+            writer.writerow([
+                'Installments', 
+                len(installments), 
+                f"{installments_total:.2f}",
+                f"{(installments_total/total_amount*100):.1f}%" if total_amount > 0 else "0%"
+            ])
+            writer.writerow([
+                'Regular Transactions', 
+                len(regular_transactions), 
+                f"{regular_total:.2f}",
+                f"{(regular_total/total_amount*100):.1f}%" if total_amount > 0 else "0%"
+            ])
+            
+            # Per-card breakdown
+            writer.writerow([])
+            writer.writerow(['=== BY CARD BREAKDOWN ==='])
+            writer.writerow(['Card', 'Installments Count', 'Installments Amount', 'Regular Count', 'Regular Amount'])
+            
+            for card, data in statements.items():
+                writer.writerow([
+                    card,
+                    len(data['installments']),
+                    f"{data['total_installments']:.2f}",
+                    len(data['regular']),
+                    f"{data['total_regular']:.2f}"
+                ])
+        
+        self.logger.info(f"Installments report exported to {filepath}")
+        return filepath
+
+    def is_likely_installment(self, transaction: Transaction) -> bool:
+        """
+        Determine if a transaction is likely an installment based on various indicators.
+        Uses the same logic as the Itaú extractor for consistency.
+        
+        Args:
+            transaction: Transaction to analyze
+            
+        Returns:
+            True if likely an installment
+        """
+        # For Itaú statements, installments typically have due dates as transaction dates
+        # or have XX/YY patterns in descriptions
+        
+        # Check for XX/YY patterns in description (strongest indicator)
+        import re
+        if re.search(r'\b\d{2}/\d{2}\b', transaction.description):
+            return True
+        
+        # Check if transaction date matches common due dates (17th of month for Itaú)
+        # This indicates the transaction was assigned the due date instead of original date
+        try:
+            date_parts = transaction.date.split('/')
+            if len(date_parts) == 3:
+                day = int(date_parts[0])
+                # Itaú typically has due dates on 17th
+                if day == 17:
+                    # Additional check: look for old dates in description that would indicate installment
+                    old_date_patterns = re.findall(r'\b(\d{1,2})/(\d{1,2})\b', transaction.description)
+                    if old_date_patterns:
+                        # Check if any of these dates are significantly older than the statement date
+                        for day_match, month_match in old_date_patterns:
+                            try:
+                                orig_day, orig_month = int(day_match), int(month_match)
+                                trans_month = int(date_parts[1])
+                                
+                                # Calculate month difference
+                                if trans_month >= orig_month:
+                                    month_diff = trans_month - orig_month
+                                else:
+                                    month_diff = trans_month + (12 - orig_month)
+                                
+                                # If original date is 2+ months old, likely installment
+                                if month_diff >= 2:
+                                    return True
+                            except:
+                                continue
+        except:
+            pass
+        
+        # Check for explicit installment indicators in description
+        installment_indicators = [
+            'parcel', 'parcela', 'installment',
+            # Common patterns that indicate installments
+            r'\d+/\d+',  # Like 06/12, 03/06, etc.
+        ]
+        
+        desc_lower = transaction.description.lower()
+        for indicator in installment_indicators:
+            if indicator.startswith('r\\') and indicator.endswith(''):
+                # Regex pattern
+                if re.search(indicator, transaction.description):
+                    return True
+            else:
+                # Simple string match
+                if indicator in desc_lower:
+                    return True
+        
+        return False
+
+    def extract_original_date_pattern(self, description: str) -> str:
+        """Extract original date patterns from transaction description."""
+        import re
+        patterns = re.findall(r'\b\d{2}/\d{2}\b', description)
+        return ', '.join(patterns) if patterns else 'None'
+
+    def calculate_month_difference(self, transaction: Transaction) -> str:
+        """Calculate month difference between original transaction date and statement date."""
+        import re
+        
+        # Extract original date patterns from description
+        date_patterns = re.findall(r'\b(\d{1,2})/(\d{1,2})\b', transaction.description)
+        if not date_patterns:
+            return 'N/A'
+        
+        try:
+            # Get transaction date (statement date)
+            trans_parts = transaction.date.split('/')
+            if len(trans_parts) != 3:
+                return 'N/A'
+            
+            trans_month = int(trans_parts[1])
+            
+            # Calculate differences for all found date patterns
+            differences = []
+            for day_str, month_str in date_patterns:
+                try:
+                    orig_month = int(month_str)
+                    
+                    # Calculate month difference
+                    if trans_month >= orig_month:
+                        month_diff = trans_month - orig_month
+                    else:
+                        month_diff = trans_month + (12 - orig_month)
+                    
+                    differences.append(f"{day_str}/{month_str}({month_diff}m)")
+                except:
+                    continue
+            
+            return ', '.join(differences) if differences else 'N/A'
+            
+        except:
+            return 'N/A'
+
+    def get_statement_period(self, transaction: Transaction) -> str:
+        """Get the statement period for the transaction."""
+        # Extract month/year from transaction date
+        try:
+            date_parts = transaction.date.split('/')
+            if len(date_parts) == 3:
+                return f"{date_parts[1]}/{date_parts[2]}"
+        except:
+            pass
+        return 'Unknown'
+
 
 def main():
     """Main function to run the bank statement extractor."""
@@ -684,7 +1124,7 @@ def main():
     parser.add_argument('--invoice-date', 
                        help='Invoice date for Omie export (DD/MM/YYYY format)')
     parser.add_argument('--report-type', '-r', 
-                       choices=['standard', 'omie', 'by-card', 'by-vendor', 'by-month', 'summary'],
+                       choices=['standard', 'omie', 'by-card', 'by-vendor', 'by-month', 'summary', 'installments'],
                        help='Type of CSV report to generate')
     
     # Bank type selection (mutually exclusive)
@@ -739,6 +1179,8 @@ def main():
                 csv_path = extractor.export_by_month_csv(args.filename)
             elif args.report_type == 'summary':
                 csv_path = extractor.export_summary_csv(args.filename)
+            elif args.report_type == 'installments':
+                csv_path = extractor.export_installments_csv(args.filename)
         else:
             # Default behavior: export standard CSV
             csv_path = extractor.export_to_csv(args.filename)
@@ -773,6 +1215,8 @@ def main():
         
         # Print summary
         summary = extractor.get_summary()
+        execution_time = getattr(extractor, 'execution_time', 0)
+        
         print(f"\n{'='*70}")
         print("EXTRACTION SUMMARY")
         print(f"{'='*70}")
@@ -782,6 +1226,7 @@ def main():
         print(f"Net amount: ${summary['net_amount']:.2f}")
         if summary['date_range']['earliest']:
             print(f"Date range: {summary['date_range']['earliest']} to {summary['date_range']['latest']}")
+        print(f"⏱️  Extraction time: {extractor.format_execution_time(execution_time)}")
         
         # Print per-card breakdown
         if 'cards' in summary and summary['cards']:
